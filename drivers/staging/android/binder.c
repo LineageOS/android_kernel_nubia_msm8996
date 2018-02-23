@@ -375,6 +375,7 @@ static int task_get_unused_fd_flags(struct binder_proc *proc, int flags)
 	struct files_struct *files = proc->files;
 	unsigned long rlim_cur;
 	unsigned long irqs;
+	int ret;
 
 	if (files == NULL)
 		return -ESRCH;
@@ -385,7 +386,11 @@ static int task_get_unused_fd_flags(struct binder_proc *proc, int flags)
 	rlim_cur = task_rlimit(proc->tsk, RLIMIT_NOFILE);
 	unlock_task_sighand(proc->tsk, &irqs);
 
-	return __alloc_fd(files, 0, rlim_cur, flags);
+		preempt_enable_no_resched();
+ 	ret = __alloc_fd(files, 0, rlim_cur, flags);
+ 	preempt_disable();
+ 
+ 	return ret;
 }
 
 /*
@@ -618,6 +623,7 @@ static int binder_update_page_range(struct binder_proc *proc, int allocate,
 		up_write(&mm->mmap_sem);
 		mmput(mm);
 	}
+	preempt_disable();
 	return 0;
 
 free_range:
@@ -640,6 +646,7 @@ err_no_vma:
 		up_write(&mm->mmap_sem);
 		mmput(mm);
 	}
+	preempt_disable();
 	return -ENOMEM;
 }
 
@@ -2090,7 +2097,7 @@ static int binder_thread_write(struct binder_proc *proc,
 			if (get_user(cookie, (binder_uintptr_t __user *)ptr))
 				return -EFAULT;
 
-			ptr += sizeof(void *);
+			ptr += sizeof(cookie);
 			list_for_each_entry(w, &proc->delivered_death, entry) {
 				struct binder_ref_death *tmp_death = container_of(w, struct binder_ref_death, work);
 
@@ -2864,7 +2871,7 @@ static int binder_mmap(struct file *filp, struct vm_area_struct *vma)
 	const char *failure_string;
 	struct binder_buffer *buffer;
 
-	if (proc->tsk != current)
+	if (proc->tsk != current->group_leader)
 		return -EINVAL;
 
 	if ((vma->vm_end - vma->vm_start) > SZ_4M)
@@ -2965,8 +2972,8 @@ static int binder_open(struct inode *nodp, struct file *filp)
 	proc = kzalloc(sizeof(*proc), GFP_KERNEL);
 	if (proc == NULL)
 		return -ENOMEM;
-	get_task_struct(current);
-	proc->tsk = current;
+	get_task_struct(current->group_leader);
+	proc->tsk = current->group_leader;
 	INIT_LIST_HEAD(&proc->todo);
 	init_waitqueue_head(&proc->wait);
 	proc->default_priority = task_nice(current);
